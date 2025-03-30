@@ -39,8 +39,8 @@ type FileInfo struct {
 
 // Manifest holds the checksums for all collected files from all servers
 type Manifest struct {
-	mu            sync.RWMutex                   // Protect access to the map
-	FilesByServer map[string]map[string]FileInfo `json:"files_by_server"` // server -> relativePath -> FileInfo
+	Mu            sync.RWMutex
+	FilesByServer map[string]map[string]FileInfo `json:"files_by_server"`
 }
 
 func NewManifest() *Manifest {
@@ -51,8 +51,8 @@ func NewManifest() *Manifest {
 
 // AddFile adds or updates file info in the manifest safely.
 func (m *Manifest) AddFile(server, relativePath, checksum, fileError string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.Mu.Lock()
+	defer m.Mu.Unlock()
 
 	if _, ok := m.FilesByServer[server]; !ok {
 		m.FilesByServer[server] = make(map[string]FileInfo)
@@ -66,8 +66,8 @@ func (m *Manifest) AddFile(server, relativePath, checksum, fileError string) {
 
 // GetFileInfo retrieves file info safely.
 func (m *Manifest) GetFileInfo(server, relativePath string) (FileInfo, bool) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.Mu.RLock()
+	defer m.Mu.RUnlock()
 
 	serverFiles, ok := m.FilesByServer[server]
 	if !ok {
@@ -79,8 +79,8 @@ func (m *Manifest) GetFileInfo(server, relativePath string) (FileInfo, bool) {
 
 // Save persists the manifest to disk.
 func (m *Manifest) Save(outputDir string) error {
-	m.mu.RLock() // Read lock is sufficient for marshaling
-	defer m.mu.RUnlock()
+	m.Mu.RLock() // Read lock is sufficient for marshaling
+	defer m.Mu.RUnlock()
 
 	manifestPath := filepath.Join(outputDir, ManifestFileName)
 	data, err := json.MarshalIndent(m, "", "  ")
@@ -157,10 +157,10 @@ func GetSSHCredentialsFromEnv() (SSHCredentials, error) {
 func LoadOrInitializeConfig(outputDir, serversStr, filesStr, dirsStr string, saveConfig bool) (*Config, error) {
 	configPath := filepath.Join(outputDir, ConfigFileName)
 	cfg := &Config{}
-	configExists := false
+	// configExists := false // <-- DELETE or COMMENT OUT this line
 
 	if _, err := os.Stat(configPath); err == nil {
-		configExists = true
+		// configExists = true // <-- DELETE or COMMENT OUT this line
 		data, err := os.ReadFile(configPath)
 		if err != nil {
 			return nil, errors.Wrapf(err, "failed to read existing config file %s", configPath)
@@ -169,6 +169,7 @@ func LoadOrInitializeConfig(outputDir, serversStr, filesStr, dirsStr string, sav
 			log.Warnf("Failed to parse existing config file %s: %v. Proceeding with arguments.", configPath, err)
 			// Reset cfg to avoid partial data
 			cfg = &Config{}
+			// configExists = false // <-- DELETE or COMMENT OUT this line if it exists
 		} else {
 			log.Infof("Loaded existing configuration from %s", configPath)
 		}
