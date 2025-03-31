@@ -30,7 +30,7 @@ func compareSingleFile(
 	filePath string,
 	servers []string,
 	manifest *config.Manifest,
-	baseOutputDir string,
+	baseOutputDir string, // This is the main output dir (e.g., ".")
 	saveDiffs bool,
 	diffDir string,
 	resultChan chan<- fileComparisonResult,
@@ -59,9 +59,13 @@ func compareSingleFile(
 			continue // Don't record checksum if missing/error
 		}
 
-		// Store checksum and path
+		// Store checksum
 		checksums[server] = info.Checksum
-		filePaths[server] = filepath.Join(baseOutputDir, fmt.Sprintf("files-%s", server), filepath.FromSlash(filePath)) // Use local path separator
+
+		// --- PATH UPDATED TO INCLUDE CollectedFilesBaseDir ---
+		// Construct the full path to the local file within the collected-files structure
+		filePaths[server] = filepath.Join(baseOutputDir, config.CollectedFilesBaseDir, fmt.Sprintf("files-%s", server), filepath.FromSlash(filePath)) // Use local path separator
+		// --- END OF PATH UPDATE ---
 
 		// Compare checksum with the first one found
 		if i == 0 {
@@ -199,7 +203,13 @@ func getFilesToCompare(servers []string, manifest *config.Manifest) []string {
 			presentOn := []string{}
 			missingOn := []string{}
 			for _, server := range servers {
-				info, exists := manifest.FilesByServer[server][filePath]
+				// Ensure we re-check inside the map safely
+				var info config.FileInfo
+				var exists bool
+				if serverData, serverOK := manifest.FilesByServer[server]; serverOK {
+					info, exists = serverData[filePath]
+				}
+
 				if exists && info.Error == "" {
 					presentOn = append(presentOn, server)
 				} else {
@@ -220,19 +230,24 @@ func getFilesToCompare(servers []string, manifest *config.Manifest) []string {
 func RunAnalysis(cfg *config.Config, outputDir, diffDir string, saveDiffs bool, maxConcurrency int) (bool, error) {
 	log.Info("Starting analysis...")
 
-	// 1. Load Manifest
+	// 1. Load Manifest (Uses updated path via LoadManifest internally)
 	manifest, err := config.LoadManifest(outputDir)
 	if err != nil {
 		return false, errors.Wrap(err, "failed to load manifest for analysis")
 	}
 
+	// --- PATH UPDATED FOR DIRECTORY CHECK ---
 	// Verify collection directories exist for all servers in config
+	log.Debugf("Verifying existence of collection directories in %s/%s/files-*", outputDir, config.CollectedFilesBaseDir)
 	for _, server := range cfg.Servers {
-		serverDir := filepath.Join(outputDir, fmt.Sprintf("files-%s", server))
+		serverDir := filepath.Join(outputDir, config.CollectedFilesBaseDir, fmt.Sprintf("files-%s", server))
 		if _, err := os.Stat(serverDir); os.IsNotExist(err) {
 			return false, fmt.Errorf("collection directory %s not found. Run 'collect' first", serverDir)
+		} else if err != nil {
+			return false, errors.Wrapf(err, "failed to stat collection directory %s", serverDir)
 		}
 	}
+	// --- END OF PATH UPDATE ---
 
 	// 2. Determine Files to Compare (Intersection based on manifest)
 	filesToCompare := getFilesToCompare(cfg.Servers, manifest)
@@ -271,7 +286,7 @@ func RunAnalysis(cfg *config.Config, outputDir, diffDir string, saveDiffs bool, 
 			}
 			defer sem.Release(1)
 
-			compareSingleFile(fp, cfg.Servers, manifest, outputDir, saveDiffs, diffDir, resultChan)
+			compareSingleFile(fp, cfg.Servers, manifest, outputDir, saveDiffs, diffDir, resultChan) // Pass baseOutputDir
 
 		}(filePath)
 	}

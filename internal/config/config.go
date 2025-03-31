@@ -12,8 +12,13 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// --- UPDATED CONSTANTS ---
+const ConfigDir = "conf"
+const CollectedFilesBaseDir = "collected-files"
 const ConfigFileName = "config.json"
-const ManifestFileName = "manifest.json" // To store checksums
+const ManifestFileName = "manifest.json"
+
+// --- END OF UPDATED CONSTANTS ---
 
 // SSHCredentials holds the SSH authentication details
 type SSHCredentials struct {
@@ -39,8 +44,8 @@ type FileInfo struct {
 
 // Manifest holds the checksums for all collected files from all servers
 type Manifest struct {
-	Mu            sync.RWMutex
-	FilesByServer map[string]map[string]FileInfo `json:"files_by_server"`
+	Mu            sync.RWMutex                   `json:"-"`               // Use exported field for cross-package access
+	FilesByServer map[string]map[string]FileInfo `json:"files_by_server"` // server -> relativePath -> FileInfo
 }
 
 func NewManifest() *Manifest {
@@ -51,8 +56,8 @@ func NewManifest() *Manifest {
 
 // AddFile adds or updates file info in the manifest safely.
 func (m *Manifest) AddFile(server, relativePath, checksum, fileError string) {
-	m.Mu.Lock()
-	defer m.Mu.Unlock()
+	m.Mu.Lock()         // Use exported field Mu
+	defer m.Mu.Unlock() // Use exported field Mu
 
 	if _, ok := m.FilesByServer[server]; !ok {
 		m.FilesByServer[server] = make(map[string]FileInfo)
@@ -66,8 +71,8 @@ func (m *Manifest) AddFile(server, relativePath, checksum, fileError string) {
 
 // GetFileInfo retrieves file info safely.
 func (m *Manifest) GetFileInfo(server, relativePath string) (FileInfo, bool) {
-	m.Mu.RLock()
-	defer m.Mu.RUnlock()
+	m.Mu.RLock()         // Use exported field Mu
+	defer m.Mu.RUnlock() // Use exported field Mu
 
 	serverFiles, ok := m.FilesByServer[server]
 	if !ok {
@@ -77,12 +82,27 @@ func (m *Manifest) GetFileInfo(server, relativePath string) (FileInfo, bool) {
 	return fileInfo, ok
 }
 
-// Save persists the manifest to disk.
-func (m *Manifest) Save(outputDir string) error {
-	m.Mu.RLock() // Read lock is sufficient for marshaling
-	defer m.Mu.RUnlock()
+// getConfigPath helper function
+func getConfigPath(outputDir string) string {
+	return filepath.Join(outputDir, ConfigDir, ConfigFileName)
+}
 
-	manifestPath := filepath.Join(outputDir, ManifestFileName)
+// getManifestPath helper function
+func getManifestPath(outputDir string) string {
+	return filepath.Join(outputDir, CollectedFilesBaseDir, ManifestFileName)
+}
+
+// Save persists the manifest to disk in the correct subfolder.
+func (m *Manifest) Save(outputDir string) error {
+	m.Mu.RLock()         // Use exported field Mu
+	defer m.Mu.RUnlock() // Use exported field Mu
+
+	manifestPath := getManifestPath(outputDir) // Use helper
+	manifestDir := filepath.Dir(manifestPath)
+	if err := os.MkdirAll(manifestDir, 0755); err != nil { // Ensure <outputDir>/collected-files/ exists
+		return errors.Wrapf(err, "failed to create manifest directory %s", manifestDir)
+	}
+
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return errors.Wrap(err, "failed to marshal manifest")
@@ -94,9 +114,9 @@ func (m *Manifest) Save(outputDir string) error {
 	return nil
 }
 
-// LoadManifest loads the manifest from disk.
+// LoadManifest loads the manifest from disk from the correct subfolder.
 func LoadManifest(outputDir string) (*Manifest, error) {
-	manifestPath := filepath.Join(outputDir, ManifestFileName)
+	manifestPath := getManifestPath(outputDir) // Use helper
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -155,12 +175,10 @@ func GetSSHCredentialsFromEnv() (SSHCredentials, error) {
 
 // LoadOrInitializeConfig loads config from file or initializes from args
 func LoadOrInitializeConfig(outputDir, serversStr, filesStr, dirsStr string, saveConfig bool) (*Config, error) {
-	configPath := filepath.Join(outputDir, ConfigFileName)
+	configPath := getConfigPath(outputDir) // Use helper
 	cfg := &Config{}
-	// configExists := false // <-- DELETE or COMMENT OUT this line
 
 	if _, err := os.Stat(configPath); err == nil {
-		// configExists = true // <-- DELETE or COMMENT OUT this line
 		data, err := os.ReadFile(configPath)
 		if err != nil {
 			return nil, errors.Wrapf(err, "failed to read existing config file %s", configPath)
@@ -169,7 +187,6 @@ func LoadOrInitializeConfig(outputDir, serversStr, filesStr, dirsStr string, sav
 			log.Warnf("Failed to parse existing config file %s: %v. Proceeding with arguments.", configPath, err)
 			// Reset cfg to avoid partial data
 			cfg = &Config{}
-			// configExists = false // <-- DELETE or COMMENT OUT this line if it exists
 		} else {
 			log.Infof("Loaded existing configuration from %s", configPath)
 		}
@@ -190,10 +207,10 @@ func LoadOrInitializeConfig(outputDir, serversStr, filesStr, dirsStr string, sav
 
 	// Basic validation
 	if len(cfg.Servers) == 0 {
-		return nil, fmt.Errorf("no servers specified (use --servers or ensure valid config.json)")
+		return nil, fmt.Errorf("no servers specified (use --servers or ensure valid %s exists)", configPath)
 	}
 	if len(cfg.Files) == 0 && len(cfg.Dirs) == 0 {
-		return nil, fmt.Errorf("no files or directories specified (use --files/--dirs or ensure valid config.json)")
+		return nil, fmt.Errorf("no files or directories specified (use --files/--dirs or ensure valid %s exists)", configPath)
 	}
 
 	// Clean paths (remove trailing slashes from dirs for consistency)
@@ -217,9 +234,12 @@ func LoadOrInitializeConfig(outputDir, serversStr, filesStr, dirsStr string, sav
 
 	// Save the potentially updated config if requested (e.g., during collect/all)
 	if saveConfig {
-		if err := os.MkdirAll(outputDir, 0755); err != nil {
-			return nil, errors.Wrapf(err, "failed to create output directory %s", outputDir)
+		// Ensure the <outputDir>/conf directory exists before writing
+		configDir := filepath.Dir(configPath)
+		if err := os.MkdirAll(configDir, 0755); err != nil {
+			return nil, errors.Wrapf(err, "failed to create config directory %s", configDir)
 		}
+
 		data, err := json.MarshalIndent(cfg, "", "  ")
 		if err != nil {
 			return nil, errors.Wrap(err, "failed to marshal config")

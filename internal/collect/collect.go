@@ -19,8 +19,8 @@ import (
 	"golang.org/x/sync/semaphore"
 )
 
-const remoteScriptPath = "/tmp/collect_files_%d.sh" // Use /tmp, add timestamp
-const remoteTarFilename = "remote_backup.tar.gz"    // Relative to user home
+const remoteScriptPath = "tmp/collect_files_%d.sh" // Use /tmp, add timestamp
+const remoteTarFilename = "remote_backup.tar.gz"   // Relative to user home
 
 // collectFromServer handles the collection process for a single server
 func collectFromServer(server string, cfg *config.Config, outputDir string, manifest *config.Manifest) error {
@@ -54,8 +54,6 @@ func collectFromServer(server string, cfg *config.Config, outputDir string, mani
 	// Use unique remote script name to avoid conflicts if run concurrently by same user
 	// Script needs to be in a place the user can write to, like /tmp or $HOME
 	remoteHomeDir := fmt.Sprintf("/home/%s", cfg.SSHConfig.Username)
-	// Use timestamp for uniqueness, place in /tmp for broader write access usually
-	// Or place in $HOME: timestamp := time.Now().UnixNano(); remoteScript := fmt.Sprintf("%s/collect_files_%d.sh", remoteHomeDir, timestamp)
 	timestamp := time.Now().UnixNano()
 	remoteScript := fmt.Sprintf("/tmp/collect_files_%d.sh", timestamp)
 
@@ -99,10 +97,14 @@ func collectFromServer(server string, cfg *config.Config, outputDir string, mani
 	log.Infof("[%s] Tarball downloaded to %s", server, localTarPath)
 
 	// 6. Extract Tarball Locally
-	serverOutputDir := filepath.Join(outputDir, fmt.Sprintf("files-%s", server))
+	// --- PATH UPDATED TO INCLUDE CollectedFilesBaseDir ---
+	serverOutputDir := filepath.Join(outputDir, config.CollectedFilesBaseDir, fmt.Sprintf("files-%s", server))
+	// --- END OF PATH UPDATE ---
+
 	if err := os.RemoveAll(serverOutputDir); err != nil { // Clear previous contents
 		log.Warnf("[%s] Failed to clear previous output directory %s: %v", server, serverOutputDir, err)
 	}
+	// MkdirAll ensures the nested structure <outputDir>/collected-files/files-<server>/ is created
 	if err := os.MkdirAll(serverOutputDir, 0755); err != nil {
 		return errors.Wrapf(err, "failed to create server output directory %s", serverOutputDir)
 	}
@@ -112,14 +114,16 @@ func collectFromServer(server string, cfg *config.Config, outputDir string, mani
 	if err != nil {
 		return errors.Wrapf(err, "failed to open local tarball %s", localTarPath)
 	}
-	err = util.ExtractTarGz(tarFile, serverOutputDir)
-	tarFile.Close() // Close file handle
+	err = util.ExtractTarGz(tarFile, serverOutputDir) // Pass the correct nested path
+	tarFile.Close()                                   // Close file handle
 	if err != nil {
 		return errors.Wrapf(err, "failed to extract tarball %s", localTarPath)
 	}
 
 	// 7. Calculate Checksums and Update Manifest
 	log.Infof("[%s] Calculating checksums for files in %s...", server, serverOutputDir)
+	// The filepath.WalkDir and filepath.Rel logic here should still work correctly
+	// as filepath.Rel calculates the path relative to the first argument (serverOutputDir)
 	err = filepath.WalkDir(serverOutputDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			log.Errorf("[%s] Error accessing path %s during walk: %v", server, path, err)

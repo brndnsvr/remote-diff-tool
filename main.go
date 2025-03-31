@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/brndnsvr/remote-diff-tool/internal/analyze"
@@ -25,6 +26,8 @@ var (
 	maxConcurrency int
 )
 
+// main.go (Replace the setupLogging function)
+
 func setupLogging() {
 	level, err := log.ParseLevel(logLevel)
 	if err != nil {
@@ -36,34 +39,40 @@ func setupLogging() {
 		FullTimestamp: true,
 	})
 
-	// Default to stderr
+	// Default to stderr initially
 	log.SetOutput(os.Stderr)
 
-	if logFile != "" {
-		file, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0660)
-		if err == nil {
-			// MultiWriter to log to both file and stderr
-			// log.SetOutput(io.MultiWriter(os.Stderr, file))
-			// Or just log to file:
-			log.SetOutput(file)
-			// Optional: Add hook to write to stderr as well if needed
-			log.Infof("Logging to file: %s", logFile)
-		} else {
-			log.Errorf("Failed to open log file %s: %v", logFile, err)
+	// Determine log file path
+	effectiveLogFile := logFile // Use user-provided path if available
+	if effectiveLogFile == "" {
+		// Default path construction within ./logs/ subdirectory
+		defaultLogDir := "logs"
+		if err := os.MkdirAll(defaultLogDir, 0755); err != nil {
+			log.Errorf("Failed to create default log directory %s: %v. Logging to stderr.", defaultLogDir, err)
+			return // Keep logging to stderr if dir creation fails
 		}
+		effectiveLogFile = filepath.Join(defaultLogDir, fmt.Sprintf("remote_diff_%s.log", time.Now().Format("20060102_150405")))
+		log.Infof("Logging to default file: %s", effectiveLogFile)
 	} else {
-		logFile = fmt.Sprintf("remote_diff_%s.log", time.Now().Format("20060102_150405"))
-		file, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0660)
-		if err == nil {
-			log.SetOutput(file)
-			log.Infof("Logging to default file: %s", logFile)
-		} else {
-			log.Errorf("Failed to open default log file %s: %v", logFile, err)
-			log.SetOutput(os.Stderr) // Fallback to stderr
-			log.Warn("Logging to stderr only")
+		// Ensure directory exists for user-specified log file
+		logDir := filepath.Dir(effectiveLogFile)
+		if err := os.MkdirAll(logDir, 0755); err != nil {
+			log.Errorf("Failed to create log directory %s for specified log file: %v. Logging to stderr.", logDir, err)
+			return // Keep logging to stderr
 		}
+		log.Infof("Logging to specified file: %s", effectiveLogFile)
 	}
 
+	// Open and set the log file
+	file, err := os.OpenFile(effectiveLogFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0660)
+	if err == nil {
+		log.SetOutput(file) // Log only to file
+		// If you want both file and stderr:
+		// log.SetOutput(io.MultiWriter(os.Stderr, file))
+	} else {
+		log.Errorf("Failed to open log file %s: %v. Logging to stderr.", effectiveLogFile, err)
+		// Fallback to stderr already set
+	}
 }
 
 func main() {
