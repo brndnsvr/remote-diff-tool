@@ -2,3 +2,4 @@ logs/*
 conf/*
 collected-files/*
 manifest.json
+remote-diff-tool
